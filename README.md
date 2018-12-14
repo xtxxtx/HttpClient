@@ -1,4 +1,4 @@
-CommonUtilities
+HttpClient
 ===============
 
-public common utilities
+C++ http client library
