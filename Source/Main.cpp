@@ -1,8 +1,19 @@
-#include	<stdio.h>
-#include	<stdlib.h>
+// Main.cpp
+
+#include <stdio.h>
+
+
+#include "HttpClient.h"
+
 
 
 int main(int argc, char* argv[])
 {
-	return 0;	
+	CHttpClient httpClient;
+
+	char szUrl[] = "http://www.baidu.com";
+
+	httpClient.Request(szUrl);
+
+	return 0;
 }
