@@ -151,6 +151,10 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 CHttpClient::CHttpClient()
 {
 	m_iFd = 0;
+
+	m_cbRead = nullptr;
+	m_pHandle = nullptr;
+
 	m_pHead = nullptr;
 	m_pTail = nullptr;
 }
