@@ -25,8 +25,12 @@ typedef int					socket_t;
 namespace URL {
 	char*	StrCpy(char* pDst, const char* pSrc);
 
-	int		Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, char* pszPath);
+	char*	StrDup(const char* pBuf);
+
+	int		Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, const char*& pszPath);
 }
+
+typedef int(*CBRead)(const char*, int, void*);
 
 enum MENTHOD {
 	HTTP_GET,
@@ -57,11 +61,11 @@ public:
 	CHttpClient();
 	~CHttpClient();
 
-	int32_t			Initialize(const char* pszUrl);
+	int32_t			Initialize(const char* pszUrl, CBRead cbRead, void* pHandle);
 
 	void			AddElem(const char* pszKey, const char* pszVal);
 
-	int				Request(const char* pszUrl);
+	int				Request();
 
 	void			Close();
 
@@ -72,6 +76,15 @@ private:
 
 private:
 	socket_t		m_iFd;
+
+	CBRead			m_cbRead;
+	void*			m_pHandle;
+
+	char*			m_pszUrl;
+	char			m_szProt[8];
+	char			m_szAddr[256];
+	uint16_t		m_iPort;
+	const char*		m_pszPath;
 
 	Elem*			m_pHead;
 	Elem*			m_pTail;

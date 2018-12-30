@@ -6,6 +6,13 @@
 #include "HttpClient.h"
 
 
+int OnRead(const char* pBuf, int iLen, void* pHandle)
+{
+
+	printf("%s", pBuf);
+
+	return 0;
+}
 
 int main(int argc, char* argv[])
 {
@@ -13,7 +20,9 @@ int main(int argc, char* argv[])
 
 	char szUrl[] = "http://www.baidu.com";
 
-	httpClient.Request(szUrl);
+	httpClient.Initialize(szUrl, OnRead, nullptr);
+
+	httpClient.Request();
 
 	return 0;
 }

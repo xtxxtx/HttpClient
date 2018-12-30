@@ -17,19 +17,46 @@ static struct CSockInit {
 } SOCK_INIT;
 #endif
 
-static char* 
+//////////////////////////////////////////////////////////////////////////
+char* 
 URL::StrCpy(char* pDst, const char* pSrc)
 {
-	while (*pDst++ = *pSrc++);
+	if (pDst == nullptr || pSrc == nullptr) {
+		return nullptr;
+	}
+
+	char* pTmp = pDst;
+	while (*pTmp++ = *pSrc++){}
+
 	return pDst;
 }
 
+char*
+URL::StrDup(const char* pBuf)
+{
+	if (pBuf == nullptr) {
+		return nullptr;
+	}
+
+	size_t len = 0;
+	char* pTmp = (char*)pBuf;
+	while (*pTmp++) len++;
+
+	char* pRet = (char*)malloc(len + 1);
+	pTmp = pRet;
+	while (*pTmp++ = *pBuf++){}
+
+	return pRet;
+}
+
 int	
-URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, char* pszPath) 
+URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, const char*& pszPath) 
 {
 	if (pszUrl == NULL || pszUrl[0] == 0) {
 		return -1;
 	}
+
+	static char* PATH_DAFAULT = "/";
 
 	char szTmp[256] = { 0 };
 	int i = 0;
@@ -51,9 +78,11 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 						}
 
 						if (pszUrl[i] == '/') {
-							StrCpy(pszPath, pszUrl + i);
+						//	StrCpy(pszPath, pszUrl + i);
+							pszPath = pszUrl + i;
 						} else if (pszUrl[i] == 0) {
-							StrCpy(pszPath, "/");
+						//	StrCpy(pszPath, "/");
+							pszPath = PATH_DAFAULT;
 						} else {
 							return -1;
 						}
@@ -61,7 +90,8 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 					} else if (pszUrl[i] == '/') {
 						szTmp[j] = 0;
 						StrCpy(pszAddr, szTmp);
-						StrCpy(pszPath, pszUrl + i);
+					//	StrCpy(pszPath, pszUrl + i);
+						pszPath = pszUrl + i;
 						iPort = 80;
 						return 0;
 					} else {
@@ -69,7 +99,8 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 					}
 				}
 				StrCpy(pszAddr, szTmp);
-				StrCpy(pszPath, "/");
+				//StrCpy(pszPath, "/");
+				pszPath = PATH_DAFAULT;
 				iPort = 80;
 			} else {
 				StrCpy(pszProt, "http");
@@ -81,9 +112,11 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 				}
 
 				if (pszUrl[i] == '/') {
-					StrCpy(pszPath, pszUrl + i);
+				//	StrCpy(pszPath, pszUrl + i);
+					pszPath = pszUrl + i;
 				} else if (pszUrl[i] == 0) {
-					StrCpy(pszPath, "/");
+				//	StrCpy(pszPath, "/");
+					pszPath = PATH_DAFAULT;
 				} else {
 					return -1;
 				}
@@ -93,7 +126,8 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 			szTmp[j] = 0;
 			StrCpy(pszProt, "http");
 			StrCpy(pszAddr, szTmp);
-			StrCpy(pszPath, pszUrl + i);
+		//	StrCpy(pszPath, pszUrl + i);
+			pszPath = pszUrl + i;
 			iPort = 80;
 			return 0;
 		} else {
@@ -105,7 +139,8 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 	if (pszUrl[i] == 0) {
 		StrCpy(pszProt, "http");
 		StrCpy(pszAddr, szTmp);
-		StrCpy(pszPath, "/");
+	//	StrCpy(pszPath, "/");
+		pszPath = PATH_DAFAULT;
 		iPort = 80;
 	}
 
@@ -126,9 +161,13 @@ CHttpClient::~CHttpClient()
 }
 
 int32_t
-CHttpClient::Initialize(const char* pszUrl)
+CHttpClient::Initialize(const char* pszUrl, CBRead cbRead, void* pHandle)
 {
+	m_pszUrl = URL::StrDup(pszUrl);
+	m_cbRead = cbRead;
+	m_pHandle = pHandle;
 
+	URL::Parser(m_pszUrl, m_szProt, m_szAddr, m_iPort, m_pszPath);
 
 	return 0;
 }
@@ -149,20 +188,14 @@ CHttpClient::AddElem(const char* pszName, const char* pszValue)
 }
 
 int
-CHttpClient::Request(const char* pszUrl)
+CHttpClient::Request()
 {
 	const int BUF_SIZ = 8192;
 	char szBuf[BUF_SIZ] = { 0 };
 
-	char szProt[8] = { 0 };
-	char szAddr[64] = { 0 };
-	uint16_t iPort = 0;
-	char szPath[256] = { 0 };
-	URL::Parser(pszUrl, szProt, szAddr, iPort, szPath);
-
 	int iOffset = 0;
-	iOffset = sprintf_s(szBuf, "GET %s HTTP/1.1\r\n", szPath);
-	iOffset += sprintf_s(szBuf + iOffset, BUF_SIZ-iOffset, "Host: %s\r\n", szAddr);
+	iOffset = sprintf_s(szBuf, "GET %s HTTP/1.1\r\n", m_pszPath);
+	iOffset += sprintf_s(szBuf + iOffset, BUF_SIZ-iOffset, "Host: %s\r\n", m_szAddr);
 	for (Elem* pCurr = m_pHead; pCurr != nullptr; pCurr = pCurr->pNext) {
 		iOffset += sprintf_s(szBuf + iOffset, BUF_SIZ - iOffset, "%s: %s\r\n", pCurr->szName, pCurr->szValue);
 	}
@@ -170,7 +203,7 @@ CHttpClient::Request(const char* pszUrl)
 
 	Cleanup(m_pHead);
 
-	socket_t iFd = Connect(szAddr, iPort);
+	socket_t iFd = Connect(m_szAddr, m_iPort);
 	if (iFd == -1) {
 		return -1;
 	}
@@ -196,13 +229,16 @@ CHttpClient::Request(const char* pszUrl)
 			break;
 		}
 		iOffset += iResult;
-		szBuf[iOffset] = 0;
+	//	szBuf[iOffset] = 0;
 
 		if (strstr(szBuf, "\r\n\r\n") == nullptr) {
 			continue;
 		}
-	}
 
+		if (m_cbRead) {
+			m_cbRead(szBuf, iOffset, m_pHandle);
+		}
+	}
 
 	closesocket(iFd);
 
