@@ -4,6 +4,8 @@
 #define	HTTPCLIENT_H_
 
 #include <stdint.h>
+
+#include <string>
 #include <map>
 
 #ifdef _MSC_VER
@@ -41,29 +43,62 @@ enum MENTHOD {
 class CHttpClient
 {
 	typedef struct tagElem {
-		char		szName[64];
-		char		szValue[512];
+		char*		pName;
+		char*		pValue;
 		tagElem*	pNext;
 
 		tagElem() {
-			szName[0] = 0;
-			szValue[0] = 0;
+			pName = 0;
+			pValue = 0;
 			pNext = nullptr;
 		}
-		tagElem(const char* pszName, const char* pszValue) {
-			URL::StrCpy(szName, pszName);
-			URL::StrCpy(szValue, pszValue);
+		tagElem(const char* name, const char* value) {
+			pName = URL::StrDup(name);
+			pValue = URL::StrDup(value);
+			pNext = nullptr;
+		}
+		~tagElem() {
+			if (pName) free(pName);
+			if (pValue) free(pValue);
 			pNext = nullptr;
 		}
 	} Elem;
+
+	class CElement
+	{
+	public:
+		CElement();
+		~CElement();
+
+		void			AddElem(const char* pszKey, const char* pszVal);
+
+		int				Build(char* pszBuf, int iSize);
+
+		const char*		GetElem(const char* pszKey);
+
+		void			Cleanup();
+
+	private:
+		Elem*	m_pHead;
+		Elem*	m_pTail;
+	};
+
+	typedef std::map<std::string, std::string>	MAP_STRING;
+
+	class CResponse
+	{
+	public:
+		CResponse();
+		~CResponse();
+
+		MAP_STRING		m_mapString;
+	};
 
 public:
 	CHttpClient();
 	~CHttpClient();
 
 	int32_t			Initialize(const char* pszUrl, CBRead cbRead, void* pHandle);
-
-	void			AddElem(const char* pszKey, const char* pszVal);
 
 	int				Request();
 
@@ -72,7 +107,11 @@ public:
 private:
 	socket_t		Connect(const char* pszAddr, uint16_t iPort);
 
-	void			Cleanup(Elem* pHead);
+	int				ParserHeader(const char* pBuf, int iLen);
+
+	int				ParserHeader1(const char* pBuf, int iLen);
+
+	const char*		GetLine(const char* pBuf, int iLen, const char*& pNext);
 
 private:
 	socket_t		m_iFd;
@@ -86,8 +125,8 @@ private:
 	uint16_t		m_iPort;
 	const char*		m_pszPath;
 
-	Elem*			m_pHead;
-	Elem*			m_pTail;
+	CElement		m_elemReq;
+	CElement		m_elemRsp;
 };
 
 #endif // !HTTPCLIENT_H_

@@ -148,36 +148,19 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 }
 
 //////////////////////////////////////////////////////////////////////////
-CHttpClient::CHttpClient()
+CHttpClient::CElement::CElement()
 {
-	m_iFd = 0;
-
-	m_cbRead = nullptr;
-	m_pHandle = nullptr;
-
 	m_pHead = nullptr;
 	m_pTail = nullptr;
 }
 
-CHttpClient::~CHttpClient()
+CHttpClient::CElement::~CElement()
 {
-
-}
-
-int32_t
-CHttpClient::Initialize(const char* pszUrl, CBRead cbRead, void* pHandle)
-{
-	m_pszUrl = URL::StrDup(pszUrl);
-	m_cbRead = cbRead;
-	m_pHandle = pHandle;
-
-	URL::Parser(m_pszUrl, m_szProt, m_szAddr, m_iPort, m_pszPath);
-
-	return 0;
+	Cleanup();
 }
 
 void
-CHttpClient::AddElem(const char* pszName, const char* pszValue)
+CHttpClient::CElement::AddElem(const char* pszName, const char* pszValue)
 {
 	Elem* pElem = new Elem(pszName, pszValue);
 
@@ -191,6 +174,83 @@ CHttpClient::AddElem(const char* pszName, const char* pszValue)
 	m_pTail = pElem;
 }
 
+const char*
+CHttpClient::CElement::GetElem(const char* pszKey)
+{
+	Elem* pTemp = m_pHead;
+	for (; pTemp; pTemp=pTemp->pNext) {
+		if (strcmp(pTemp->pName, pszKey) == 0) {
+			return pTemp->pValue;
+		}
+	}
+	return nullptr;
+}
+
+int
+CHttpClient::CElement::Build(char* pszBuf, int iSize)
+{
+	int iOffset = 0;	
+	for (Elem* pCurr = m_pHead; pCurr != nullptr; pCurr = pCurr->pNext) {
+		iOffset += sprintf_s(pszBuf + iOffset, iSize - iOffset, "%s: %s\r\n", pCurr->pName, pCurr->pValue);
+	}
+	iOffset += sprintf_s(pszBuf + iOffset, iSize - iOffset, "\r\n");
+
+	return iOffset;
+}
+
+void
+CHttpClient::CElement::Cleanup()
+{
+	Elem* pHead = m_pHead;
+	for (Elem* pCurr = m_pHead; pCurr != nullptr;) {
+		pHead = pHead->pNext;
+		delete pCurr;
+		pCurr = pHead;
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+CHttpClient::CHttpClient()
+{
+	m_iFd = 0;
+
+	m_cbRead = nullptr;
+	m_pHandle = nullptr;
+
+	m_pszUrl = nullptr;
+	m_pszPath = nullptr;
+
+}
+
+CHttpClient::~CHttpClient()
+{
+	if (m_pszUrl) {
+		free(m_pszUrl);
+		m_pszUrl = nullptr;
+	}
+}
+
+int32_t
+CHttpClient::Initialize(const char* pszUrl, CBRead cbRead, void* pHandle)
+{
+	if (m_pszUrl) {
+		free(m_pszUrl);
+	}
+
+	m_pszUrl = URL::StrDup(pszUrl);
+	m_cbRead = cbRead;
+	m_pHandle = pHandle;
+
+	URL::Parser(m_pszUrl, m_szProt, m_szAddr, m_iPort, m_pszPath);
+
+	m_elemReq.AddElem("Accept", "*/*");
+	m_elemReq.AddElem("Connection", "Keep-Alive");
+	m_elemReq.AddElem("Host", m_szAddr);
+	m_elemReq.AddElem("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/64.0.3282.140 Safari/537.36 Edge/17.17134");
+
+	return 0;
+}
+
 int
 CHttpClient::Request()
 {
@@ -199,13 +259,7 @@ CHttpClient::Request()
 
 	int iOffset = 0;
 	iOffset = sprintf_s(szBuf, "GET %s HTTP/1.1\r\n", m_pszPath);
-	iOffset += sprintf_s(szBuf + iOffset, BUF_SIZ-iOffset, "Host: %s\r\n", m_szAddr);
-	for (Elem* pCurr = m_pHead; pCurr != nullptr; pCurr = pCurr->pNext) {
-		iOffset += sprintf_s(szBuf + iOffset, BUF_SIZ - iOffset, "%s: %s\r\n", pCurr->szName, pCurr->szValue);
-	}
-	iOffset += sprintf_s(szBuf + iOffset, BUF_SIZ - iOffset, "\r\n");
-
-	Cleanup(m_pHead);
+	iOffset += m_elemReq.Build(szBuf + iOffset, BUF_SIZ - iOffset);
 
 	socket_t iFd = Connect(m_szAddr, m_iPort);
 	if (iFd == -1) {
@@ -213,13 +267,15 @@ CHttpClient::Request()
 	}
 	send(iFd, szBuf, iOffset, 0);
 
+	char* pBody = nullptr;
 	int iResult = 0;
+	int iLength = 0;
 	struct timeval tv = { 0, 100000 };
 	fd_set rfds;
 	FD_ZERO(&rfds);
 	FD_SET(iFd, &rfds);
 
-	for (iOffset=0;;) {
+	for (iOffset=0; ;) {
 		iResult = select(0, &rfds, nullptr, nullptr, &tv);
 		if (iResult == 0) {
 			continue;
@@ -233,15 +289,38 @@ CHttpClient::Request()
 			break;
 		}
 		iOffset += iResult;
-	//	szBuf[iOffset] = 0;
 
-		if (strstr(szBuf, "\r\n\r\n") == nullptr) {
-			continue;
+		if (pBody == nullptr) {
+			pBody = strstr(szBuf, "\r\n\r\n");
+			if (pBody == nullptr) {
+				continue;
+			}
+			pBody[2] = 0;
+			pBody[3] = 0;
+			pBody = pBody + 4;
+			printf("%s", szBuf);
+		
+			int iHdrLen = pBody - szBuf;
+			ParserHeader(szBuf, iHdrLen);
+
+			iOffset -= iHdrLen;
+			memmove_s(szBuf, BUF_SIZ, pBody, iOffset);
+
+			const char* pLength = m_elemRsp.GetElem("Content-Length");
+			if (pLength != nullptr) {
+				iLength = atoi(pLength);
+			}
 		}
 
+		szBuf[iOffset] = 0;
 		if (m_cbRead) {
 			m_cbRead(szBuf, iOffset, m_pHandle);
 		}
+
+		if (iLength>0 && iOffset >= iLength) {
+			break;
+		}
+		iOffset = 0;
 	}
 
 	closesocket(iFd);
@@ -280,12 +359,83 @@ CHttpClient::Connect(const char* pszAddr, uint16_t iPort)
 	return -1;
 }
 
-void
-CHttpClient::Cleanup(Elem* pHead)
+int
+CHttpClient::ParserHeader(const char* pBuf, int iLen)
 {
-	for (Elem* pCurr = pHead; pCurr != nullptr;) {
-		pHead = pHead->pNext;
-		delete pCurr;
-		pCurr = pHead;
-	}	
+	const char* pTmp = pBuf;
+
+	char szProt[32] = { 0 };
+	int iCode = 0;
+	char szDesc[256] = { 0 };
+	int i = 0;
+	for (int j=0; pTmp[i]; i++) {
+		if (pTmp[i] == ' ') {
+			szProt[j] = 0;
+			i++;
+			while (pTmp[i] == ' ') { i++; }
+
+			for (j = 0; pTmp[i]; i++) {
+				if (pTmp[i] == ' ') {
+					i++;
+					while (pTmp[i] == ' ') { i++; }
+					for (j=0; pTmp[i]!='\r'&&pTmp[i]!=0; j++,i++) {
+						szDesc[j] = pTmp[i]; 
+					}
+					szDesc[j] = 0;
+					if (pTmp[i] == '\r' && pTmp[i + 1] == '\n') {
+						i += 2;
+						return ParserHeader1(pTmp + i, iLen - i);
+					}
+					return -1;
+				} else {
+					iCode = iCode * 10 + (pTmp[i] - '0');
+				}
+			}
+		} else {
+			szProt[j++] = pTmp[i];
+		}		
+	}
+
+	return -1;
+}
+
+int
+CHttpClient::ParserHeader1(const char* pBuf, int iLen)
+{
+	const char* pKey = nullptr;
+	const char* pVal = nullptr;
+	char* pTmp = (char*)pBuf;
+	pKey = pBuf;
+	for (int i = 0; pTmp[i]; i++) {
+		if (pTmp[i] == ':') {
+			int k = i;
+			pTmp[i++] = 0;
+			while (pTmp[i] == ' ') i++;
+			for (pVal = pTmp + i; pTmp[i]; i++) {
+				if (pTmp[i] == '\r') {
+					int v = i;
+					pTmp[i] = 0;
+					m_elemRsp.AddElem(pKey, pVal);
+					pTmp[i++] = '\r';
+					if (pTmp[i] == '\n') {
+						i++;
+						pKey = pTmp + i;
+						break;
+					}
+				}
+			}
+			pTmp[k] = ':';
+		} else if (pTmp[i] == '\r') {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+const char*
+CHttpClient::GetLine(const char* pBuf, int iLen, const char*& pNext)
+{
+	const char* pTmp = pBuf;
+	return 0;
 }
