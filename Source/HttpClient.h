@@ -15,12 +15,12 @@ typedef unsigned __int64	socket_t;
 typedef unsigned int		socket_t;
 #endif
 
-#define	sclose				closesocket
+#define	xclose				closesocket
 
 #else
 typedef int					socket_t;
 
-#define sclose				close
+#define xclose				close
 
 #endif
 
@@ -109,7 +109,7 @@ private:
 
 	int				ParserHeader(const char* pBuf, int iLen);
 
-	int				ParserHeader1(const char* pBuf, int iLen);
+	int				ParserElement(const char* pBuf, int iLen);
 
 	const char*		GetLine(const char* pBuf, int iLen, const char*& pNext);
 

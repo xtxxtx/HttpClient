@@ -257,6 +257,8 @@ CHttpClient::Request()
 	const int BUF_SIZ = 8192;
 	char szBuf[BUF_SIZ] = { 0 };
 
+	m_elemRsp.Cleanup();
+
 	int iOffset = 0;
 	iOffset = sprintf_s(szBuf, "GET %s HTTP/1.1\r\n", m_pszPath);
 	iOffset += m_elemReq.Build(szBuf + iOffset, BUF_SIZ - iOffset);
@@ -323,7 +325,7 @@ CHttpClient::Request()
 		iOffset = 0;
 	}
 
-	closesocket(iFd);
+	xclose(iFd);
 
 	return 0;
 }
@@ -368,7 +370,7 @@ CHttpClient::ParserHeader(const char* pBuf, int iLen)
 	int iCode = 0;
 	char szDesc[256] = { 0 };
 	int i = 0;
-	for (int j=0; pTmp[i]; i++) {
+	for (int j=0; pTmp[i]&&i<32; i++) {
 		if (pTmp[i] == ' ') {
 			szProt[j] = 0;
 			i++;
@@ -384,7 +386,7 @@ CHttpClient::ParserHeader(const char* pBuf, int iLen)
 					szDesc[j] = 0;
 					if (pTmp[i] == '\r' && pTmp[i + 1] == '\n') {
 						i += 2;
-						return ParserHeader1(pTmp + i, iLen - i);
+						return ParserElement(pTmp + i, iLen - i);
 					}
 					return -1;
 				} else {
@@ -400,7 +402,7 @@ CHttpClient::ParserHeader(const char* pBuf, int iLen)
 }
 
 int
-CHttpClient::ParserHeader1(const char* pBuf, int iLen)
+CHttpClient::ParserElement(const char* pBuf, int iLen)
 {
 	const char* pKey = nullptr;
 	const char* pVal = nullptr;
