@@ -250,6 +250,93 @@ CHttpClient::Initialize(const char* pszUrl, CBRead cbRead, void* pHandle)
 	return 0;
 }
 
+typedef struct tagCtx {
+	SSL_CTX*	ctx;
+	SSL*		ssl;
+	socket_t	fd;
+
+	int (*fWrite)(tagCtx&, const char*, int);
+	int (*fRead)(tagCtx&, char*, int);
+
+	tagCtx() {
+		ctx = nullptr;
+		ssl = nullptr;
+		fd = -1;
+
+		fWrite = nullptr;
+		fRead = nullptr;
+	}
+	~tagCtx() {
+		if (ssl) {
+			SSL_shutdown(ssl);
+			SSL_free(ssl);
+		}
+		xclose(fd);
+
+		if (ctx) {
+			SSL_CTX_free(ctx);
+		}
+	}
+
+	int Initialize(const char*pszProt) {
+		if (_stricmp(pszProt, "HTTPS") == 0) {
+			ctx = SSL_CTX_new(TLS_client_method());
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+			ssl = SSL_new(ctx);
+			SSL_set_fd(ssl, (int)fd);
+			if (SSL_connect(ssl) == -1) {
+				printf("SSL_connect() failed.\n");
+				return -1;
+			}
+
+			fWrite = Write1;
+			fRead = Read1;
+		} else {
+			fWrite = Write0;
+			fRead = Read0;
+		}
+
+		return 0;
+	}
+
+	static int Write0(tagCtx& ctx, const char* pBuf, int iLen) { return send(ctx.fd, pBuf, iLen, 0); }
+	static int Write1(tagCtx& ctx, const char* pBuf, int iLen) { return SSL_write(ctx.ssl, pBuf, iLen); }
+
+	static int Read0(tagCtx& ctx, char* pBuf, int iLen) { return recv(ctx.fd, pBuf, iLen, 0); }
+	static int Read1(tagCtx& ctx, char* pBuf, int iLen) { return SSL_read(ctx.ssl, pBuf, iLen); }
+} CTX;
+
+socket_t
+CHttpClient::Connect(const char* pszAddr, uint16_t iPort)
+{
+	socket_t iFd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+	char szPort[8] = { 0 };
+	_itoa_s(iPort, szPort, 10);
+
+	addrinfo* ais = NULL;
+	if (getaddrinfo(pszAddr, szPort, NULL, &ais) || ais == NULL) {
+		return -1;
+	}
+
+	for (addrinfo* tmp = ais; tmp != NULL; tmp = tmp->ai_next) {
+		if (tmp->ai_family != AF_INET) {
+			continue;
+		}
+		sockaddr_in* sainf = (sockaddr_in*)(tmp->ai_addr);
+
+		if (connect(iFd, tmp->ai_addr, sizeof(struct sockaddr_in)) == 0) {
+			int iValue = 0x10000;
+			setsockopt(iFd, SOL_SOCKET, SO_RCVBUF, (const char*)&iValue, sizeof(iValue));
+			setsockopt(iFd, SOL_SOCKET, SO_SNDBUF, (const char*)&iValue, sizeof(iValue));
+
+			return iFd;
+		}
+	}
+
+	return -1;
+}
+
 int
 CHttpClient::Request()
 {
@@ -262,31 +349,14 @@ CHttpClient::Request()
 	iOffset = sprintf_s(szBuf, "GET %s HTTP/1.1\r\n", m_pszPath);
 	iOffset += m_elemReq.Build(szBuf + iOffset, BUF_SIZ - iOffset);
 
-	socket_t iFd = Connect(m_szAddr, m_iPort);
-	if (iFd == -1) {
+	CTX ctx;
+	ctx.fd = Connect(m_szAddr, m_iPort);
+	if (ctx.fd == -1) {
 		return -1;
 	}
+	ctx.Initialize(m_szProt);
 
-	SSL_CTX* ctx = nullptr;
-	SSL* ssl = nullptr;
-	if (_stricmp(m_szProt, "HTTPS")==0) {
-		ctx = SSL_CTX_new(TLS_client_method());
-		SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
-		ssl = SSL_new(ctx);
-		SSL_set_fd(ssl, (int)iFd);
-		if (SSL_connect(ssl) == -1) {
-			int iCode = errno;
-			int iResult = ERR_get_error(); //SSL_ERROR_WANT_READ
-
-			return -1;
-		}
-	}
-
-	if (ssl == nullptr) {
-		send(iFd, szBuf, iOffset, 0);
-	} else {
-		SSL_write(ssl, szBuf, iOffset);
-	}
+	ctx.fWrite(ctx, szBuf, iOffset);
 
 	char* pBody = nullptr;
 	int iResult = 0;
@@ -294,7 +364,7 @@ CHttpClient::Request()
 	struct timeval tv = { 0, 100000 };
 	fd_set rfds;
 	FD_ZERO(&rfds);
-	FD_SET(iFd, &rfds);
+	FD_SET(ctx.fd, &rfds);
 
 	for (iOffset=0; ;) {
 		iResult = select(0, &rfds, nullptr, nullptr, &tv);
@@ -305,11 +375,7 @@ CHttpClient::Request()
 			break;
 		}
 
-		if (ssl == nullptr) {
-			iResult = recv(iFd, szBuf + iOffset, BUF_SIZ - iOffset, 0);
-		} else {
-			iResult = SSL_read(ssl, szBuf + iOffset, BUF_SIZ - iOffset);
-		}
+		iResult = ctx.fRead(ctx, szBuf + iOffset, BUF_SIZ - iOffset);
 		if (iResult < 1) {
 			break;
 		}
@@ -348,48 +414,9 @@ CHttpClient::Request()
 		iOffset = 0;
 	}
 
-	if (ssl) {
-		SSL_shutdown(ssl);
-		SSL_free(ssl);
-	}
-	xclose(iFd);
-
-	if (ctx) {
-		SSL_CTX_free(ctx);
-	}
+	
 
 	return 0;
-}
-
-socket_t
-CHttpClient::Connect(const char* pszAddr, uint16_t iPort)
-{
-	socket_t iFd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-	char szPort[8] = { 0 };
-	_itoa_s(iPort, szPort, 10);
-
-	addrinfo* ais = NULL;
-	if (getaddrinfo(pszAddr, szPort, NULL, &ais) || ais == NULL) {
-		return -1;
-	}
-
-	for (addrinfo* tmp = ais; tmp != NULL; tmp = tmp->ai_next) {
-		if (tmp->ai_family != AF_INET) {
-			continue;
-		}
-		sockaddr_in* sainf = (sockaddr_in*)(tmp->ai_addr);
-
-		if (connect(iFd, tmp->ai_addr, sizeof(struct sockaddr_in)) == 0) {
-			int iValue = 0x10000;
-			setsockopt(iFd, SOL_SOCKET, SO_RCVBUF, (const char*)&iValue, sizeof(iValue));
-			setsockopt(iFd, SOL_SOCKET, SO_SNDBUF, (const char*)&iValue, sizeof(iValue));
-
-			return iFd;
-		}
-	}
-
-	return -1;
 }
 
 int
