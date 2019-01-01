@@ -105,8 +105,6 @@ public:
 	void			Close();
 
 private:
-	socket_t		Connect(const char* pszAddr, uint16_t iPort);
-
 	int				ParserHeader(const char* pBuf, int iLen);
 
 	int				ParserElement(const char* pBuf, int iLen);
@@ -114,8 +112,6 @@ private:
 	const char*		GetLine(const char* pBuf, int iLen, const char*& pNext);
 
 private:
-	socket_t		m_iFd;
-
 	CBRead			m_cbRead;
 	void*			m_pHandle;
 

@@ -147,6 +147,105 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 }
 
 //////////////////////////////////////////////////////////////////////////
+class CSocket
+{
+public:
+	CSocket() {
+		fd = -1;
+		ctx = nullptr;
+		ssl = nullptr;
+
+		fWrite = nullptr;
+		fRead = nullptr;
+	}
+	~CSocket() {
+		if (ssl) {
+			SSL_shutdown(ssl);
+			SSL_free(ssl);
+		}
+		xclose(fd);
+
+		if (ctx) {
+			SSL_CTX_free(ctx);
+		}
+	}
+
+	int Initialize(const char*pszProt, const char* pszAddr, uint16_t iPort) {
+		fd = Connect(pszAddr, iPort);
+		if (fd == -1) {
+			return -1;
+		}
+
+		if (_stricmp(pszProt, "HTTPS") == 0) {
+			ctx = SSL_CTX_new(TLS_client_method());
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+			ssl = SSL_new(ctx);
+			SSL_set_fd(ssl, (int)fd);
+			if (SSL_connect(ssl) == -1) {
+				printf("SSL_connect() failed.\n");
+				return -1;
+			}
+
+			fWrite = Write1;
+			fRead = Read1;
+		}
+		else {
+			fWrite = Write0;
+			fRead = Read0;
+		}
+
+		return 0;
+	}
+
+private:
+	socket_t Connect(const char* pszAddr, uint16_t iPort) {
+		socket_t iFd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+		char szPort[8] = { 0 };
+		_itoa_s(iPort, szPort, 10);
+
+		addrinfo* ais = NULL;
+		if (getaddrinfo(pszAddr, szPort, NULL, &ais) || ais == NULL) {
+			return -1;
+		}
+
+		for (addrinfo* tmp = ais; tmp != NULL; tmp = tmp->ai_next) {
+			if (tmp->ai_family != AF_INET) {
+				continue;
+			}
+			sockaddr_in* sainf = (sockaddr_in*)(tmp->ai_addr);
+
+			if (connect(iFd, tmp->ai_addr, sizeof(struct sockaddr_in)) == 0) {
+				int iValue = 0x10000;
+				setsockopt(iFd, SOL_SOCKET, SO_RCVBUF, (const char*)&iValue, sizeof(iValue));
+				setsockopt(iFd, SOL_SOCKET, SO_SNDBUF, (const char*)&iValue, sizeof(iValue));
+
+				return iFd;
+			}
+		}
+
+		return -1;
+	}
+
+	static int Read0(CSocket& ctx, char* pBuf, int iLen) { return recv(ctx.fd, pBuf, iLen, 0); }
+	static int Write0(CSocket& ctx, const char* pBuf, int iLen) { return send(ctx.fd, pBuf, iLen, 0); }
+
+	static int Read1(CSocket& ctx, char* pBuf, int iLen) { return SSL_read(ctx.ssl, pBuf, iLen); }
+	static int Write1(CSocket& ctx, const char* pBuf, int iLen) { return SSL_write(ctx.ssl, pBuf, iLen); }
+
+public:
+	socket_t	fd;
+
+	int(*fWrite)(CSocket&, const char*, int);
+	int(*fRead)(CSocket&, char*, int);
+
+private:
+	SSL_CTX*	ctx;
+	SSL*		ssl;
+
+};
+
+//////////////////////////////////////////////////////////////////////////
 CHttpClient::CElement::CElement()
 {
 	m_pHead = nullptr;
@@ -211,14 +310,11 @@ CHttpClient::CElement::Cleanup()
 //////////////////////////////////////////////////////////////////////////
 CHttpClient::CHttpClient()
 {
-	m_iFd = 0;
-
 	m_cbRead = nullptr;
 	m_pHandle = nullptr;
 
 	m_pszUrl = nullptr;
 	m_pszPath = nullptr;
-
 }
 
 CHttpClient::~CHttpClient()
@@ -242,99 +338,13 @@ CHttpClient::Initialize(const char* pszUrl, CBRead cbRead, void* pHandle)
 
 	URL::Parser(m_pszUrl, m_szProt, m_szAddr, m_iPort, m_pszPath);
 
+	m_elemReq.Cleanup();
 	m_elemReq.AddElem("Accept", "*/*");
 	m_elemReq.AddElem("Connection", "Keep-Alive");
 	m_elemReq.AddElem("Host", m_szAddr);
 	m_elemReq.AddElem("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/64.0.3282.140 Safari/537.36 Edge/17.17134");
 
 	return 0;
-}
-
-typedef struct tagCtx {
-	SSL_CTX*	ctx;
-	SSL*		ssl;
-	socket_t	fd;
-
-	int (*fWrite)(tagCtx&, const char*, int);
-	int (*fRead)(tagCtx&, char*, int);
-
-	tagCtx() {
-		ctx = nullptr;
-		ssl = nullptr;
-		fd = -1;
-
-		fWrite = nullptr;
-		fRead = nullptr;
-	}
-	~tagCtx() {
-		if (ssl) {
-			SSL_shutdown(ssl);
-			SSL_free(ssl);
-		}
-		xclose(fd);
-
-		if (ctx) {
-			SSL_CTX_free(ctx);
-		}
-	}
-
-	int Initialize(const char*pszProt) {
-		if (_stricmp(pszProt, "HTTPS") == 0) {
-			ctx = SSL_CTX_new(TLS_client_method());
-			SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
-			ssl = SSL_new(ctx);
-			SSL_set_fd(ssl, (int)fd);
-			if (SSL_connect(ssl) == -1) {
-				printf("SSL_connect() failed.\n");
-				return -1;
-			}
-
-			fWrite = Write1;
-			fRead = Read1;
-		} else {
-			fWrite = Write0;
-			fRead = Read0;
-		}
-
-		return 0;
-	}
-
-	static int Write0(tagCtx& ctx, const char* pBuf, int iLen) { return send(ctx.fd, pBuf, iLen, 0); }
-	static int Write1(tagCtx& ctx, const char* pBuf, int iLen) { return SSL_write(ctx.ssl, pBuf, iLen); }
-
-	static int Read0(tagCtx& ctx, char* pBuf, int iLen) { return recv(ctx.fd, pBuf, iLen, 0); }
-	static int Read1(tagCtx& ctx, char* pBuf, int iLen) { return SSL_read(ctx.ssl, pBuf, iLen); }
-} CTX;
-
-socket_t
-CHttpClient::Connect(const char* pszAddr, uint16_t iPort)
-{
-	socket_t iFd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-	char szPort[8] = { 0 };
-	_itoa_s(iPort, szPort, 10);
-
-	addrinfo* ais = NULL;
-	if (getaddrinfo(pszAddr, szPort, NULL, &ais) || ais == NULL) {
-		return -1;
-	}
-
-	for (addrinfo* tmp = ais; tmp != NULL; tmp = tmp->ai_next) {
-		if (tmp->ai_family != AF_INET) {
-			continue;
-		}
-		sockaddr_in* sainf = (sockaddr_in*)(tmp->ai_addr);
-
-		if (connect(iFd, tmp->ai_addr, sizeof(struct sockaddr_in)) == 0) {
-			int iValue = 0x10000;
-			setsockopt(iFd, SOL_SOCKET, SO_RCVBUF, (const char*)&iValue, sizeof(iValue));
-			setsockopt(iFd, SOL_SOCKET, SO_SNDBUF, (const char*)&iValue, sizeof(iValue));
-
-			return iFd;
-		}
-	}
-
-	return -1;
 }
 
 int
@@ -349,14 +359,12 @@ CHttpClient::Request()
 	iOffset = sprintf_s(szBuf, "GET %s HTTP/1.1\r\n", m_pszPath);
 	iOffset += m_elemReq.Build(szBuf + iOffset, BUF_SIZ - iOffset);
 
-	CTX ctx;
-	ctx.fd = Connect(m_szAddr, m_iPort);
-	if (ctx.fd == -1) {
+	CSocket sock;
+	if (sock.Initialize(m_szProt, m_szAddr, m_iPort) == -1) {
 		return -1;
 	}
-	ctx.Initialize(m_szProt);
 
-	ctx.fWrite(ctx, szBuf, iOffset);
+	sock.fWrite(sock, szBuf, iOffset);
 
 	char* pBody = nullptr;
 	int iResult = 0;
@@ -364,7 +372,7 @@ CHttpClient::Request()
 	struct timeval tv = { 0, 100000 };
 	fd_set rfds;
 	FD_ZERO(&rfds);
-	FD_SET(ctx.fd, &rfds);
+	FD_SET(sock.fd, &rfds);
 
 	for (iOffset=0; ;) {
 		iResult = select(0, &rfds, nullptr, nullptr, &tv);
@@ -375,7 +383,7 @@ CHttpClient::Request()
 			break;
 		}
 
-		iResult = ctx.fRead(ctx, szBuf + iOffset, BUF_SIZ - iOffset);
+		iResult = sock.fRead(sock, szBuf + iOffset, BUF_SIZ - iOffset);
 		if (iResult < 1) {
 			break;
 		}
