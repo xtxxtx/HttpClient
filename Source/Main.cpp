@@ -18,7 +18,7 @@ int main(int argc, char* argv[])
 {
 	CHttpClient httpClient;
 
-	char szUrl[] = "http://www.baidu.com";
+	char szUrl[] = "https://www.baidu.com";
 
 	httpClient.Initialize(szUrl, OnRead, nullptr);
 

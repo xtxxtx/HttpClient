@@ -5,11 +5,16 @@
 #else
 #endif
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
 #include "HttpClient.h"
 
 
 #ifdef _MSC_VER
-#pragma comment(lib, "ws2_32")
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "openssl/libcrypto.lib")
+#pragma comment(lib, "openssl/libssl.lib")
 
 static struct CSockInit {
 	CSockInit()	{ WSADATA dat; WSAStartup(0x0202, &dat); }
@@ -56,15 +61,16 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 		return -1;
 	}
 
-	static char* PATH_DAFAULT = "/";
+	static const char* PATH_DAFAULT = "/";
 
+	bool bS = false;
 	char szTmp[256] = { 0 };
 	int i = 0;
 	for (int j = 0; pszUrl[i]; i++) {
 		if (pszUrl[i] == ':') {
 			szTmp[j] = 0;
-			++i;
-			if (pszUrl[i] == '/') {
+			if (pszUrl[++i] == '/') {
+				bS = (pszUrl[i-2] == 's' || pszUrl[i-2] == 'S');
 				StrCpy(pszProt, szTmp);
 				i += 2;
 				for (j = 0; pszUrl[i]; i++) {
@@ -78,10 +84,8 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 						}
 
 						if (pszUrl[i] == '/') {
-						//	StrCpy(pszPath, pszUrl + i);
 							pszPath = pszUrl + i;
 						} else if (pszUrl[i] == 0) {
-						//	StrCpy(pszPath, "/");
 							pszPath = PATH_DAFAULT;
 						} else {
 							return -1;
@@ -90,18 +94,17 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 					} else if (pszUrl[i] == '/') {
 						szTmp[j] = 0;
 						StrCpy(pszAddr, szTmp);
-					//	StrCpy(pszPath, pszUrl + i);
 						pszPath = pszUrl + i;
-						iPort = 80;
+						iPort = bS ? 443 : 80;
 						return 0;
 					} else {
 						szTmp[j++] = pszUrl[i];
 					}
 				}
 				StrCpy(pszAddr, szTmp);
-				//StrCpy(pszPath, "/");
 				pszPath = PATH_DAFAULT;
-				iPort = 80;
+				
+				iPort = bS ? 443 : 80;
 			} else {
 				StrCpy(pszProt, "http");
 				StrCpy(pszAddr, szTmp);
@@ -112,10 +115,8 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 				}
 
 				if (pszUrl[i] == '/') {
-				//	StrCpy(pszPath, pszUrl + i);
 					pszPath = pszUrl + i;
 				} else if (pszUrl[i] == 0) {
-				//	StrCpy(pszPath, "/");
 					pszPath = PATH_DAFAULT;
 				} else {
 					return -1;
@@ -126,7 +127,6 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 			szTmp[j] = 0;
 			StrCpy(pszProt, "http");
 			StrCpy(pszAddr, szTmp);
-		//	StrCpy(pszPath, pszUrl + i);
 			pszPath = pszUrl + i;
 			iPort = 80;
 			return 0;
@@ -139,7 +139,6 @@ URL::Parser(const char* pszUrl, char* pszProt, char* pszAddr, uint16_t& iPort, c
 	if (pszUrl[i] == 0) {
 		StrCpy(pszProt, "http");
 		StrCpy(pszAddr, szTmp);
-	//	StrCpy(pszPath, "/");
 		pszPath = PATH_DAFAULT;
 		iPort = 80;
 	}
@@ -267,7 +266,27 @@ CHttpClient::Request()
 	if (iFd == -1) {
 		return -1;
 	}
-	send(iFd, szBuf, iOffset, 0);
+
+	SSL_CTX* ctx = nullptr;
+	SSL* ssl = nullptr;
+	if (_stricmp(m_szProt, "HTTPS")==0) {
+		ctx = SSL_CTX_new(TLS_client_method());
+		SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+		ssl = SSL_new(ctx);
+		SSL_set_fd(ssl, (int)iFd);
+		if (SSL_connect(ssl) == -1) {
+			int iCode = errno;
+			int iResult = ERR_get_error(); //SSL_ERROR_WANT_READ
+
+			return -1;
+		}
+	}
+
+	if (ssl == nullptr) {
+		send(iFd, szBuf, iOffset, 0);
+	} else {
+		SSL_write(ssl, szBuf, iOffset);
+	}
 
 	char* pBody = nullptr;
 	int iResult = 0;
@@ -286,7 +305,11 @@ CHttpClient::Request()
 			break;
 		}
 
-		iResult = recv(iFd, szBuf+iOffset, BUF_SIZ-iOffset, 0);
+		if (ssl == nullptr) {
+			iResult = recv(iFd, szBuf + iOffset, BUF_SIZ - iOffset, 0);
+		} else {
+			iResult = SSL_read(ssl, szBuf + iOffset, BUF_SIZ - iOffset);
+		}
 		if (iResult < 1) {
 			break;
 		}
@@ -302,7 +325,7 @@ CHttpClient::Request()
 			pBody = pBody + 4;
 			printf("%s", szBuf);
 		
-			int iHdrLen = pBody - szBuf;
+			int iHdrLen = int(pBody - szBuf);
 			ParserHeader(szBuf, iHdrLen);
 
 			iOffset -= iHdrLen;
@@ -325,7 +348,15 @@ CHttpClient::Request()
 		iOffset = 0;
 	}
 
+	if (ssl) {
+		SSL_shutdown(ssl);
+		SSL_free(ssl);
+	}
 	xclose(iFd);
+
+	if (ctx) {
+		SSL_CTX_free(ctx);
+	}
 
 	return 0;
 }
