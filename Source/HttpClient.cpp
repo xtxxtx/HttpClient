@@ -190,8 +190,7 @@ public:
 
 			fWrite = Write1;
 			fRead = Read1;
-		}
-		else {
+		} else {
 			fWrite = Write0;
 			fRead = Read0;
 		}
