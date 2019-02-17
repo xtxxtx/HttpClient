@@ -162,11 +162,13 @@ public:
 		if (ssl) {
 			SSL_shutdown(ssl);
 			SSL_free(ssl);
+			ssl = nullptr;
 		}
 		xclose(fd);
 
 		if (ctx) {
 			SSL_CTX_free(ctx);
+			ctx = nullptr;
 		}
 	}
 
@@ -236,8 +238,8 @@ private:
 public:
 	socket_t	fd;
 
-	int(*fWrite)(CSocket&, const char*, int);
-	int(*fRead)(CSocket&, char*, int);
+	int (*fWrite)(CSocket&, const char*, int);
+	int (*fRead)(CSocket&, char*, int);
 
 private:
 	SSL_CTX*	ctx;
