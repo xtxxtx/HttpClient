@@ -2,13 +2,11 @@
 
 #include <stdio.h>
 
-
 #include "HttpClient.h"
 
 
 int OnRead(const char* pBuf, int iLen, void* pHandle)
 {
-
 	printf("%s", pBuf);
 
 	return 0;
